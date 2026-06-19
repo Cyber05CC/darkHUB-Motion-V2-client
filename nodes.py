@@ -458,6 +458,22 @@ class darkHUB_Subgraph:
                             args[input_name] = input_def[1]["default"]
 
             # Run node execution
+            try:
+                import inspect
+                sig = inspect.signature(func)
+                for param_name in sig.parameters:
+                    if param_name not in args:
+                        if param_name == "unique_id":
+                            args["unique_id"] = str(node_id)
+                        elif param_name == "prompt":
+                            args["prompt"] = kwargs.get("prompt", {})
+                        elif param_name == "extra_pnginfo":
+                            args["extra_pnginfo"] = kwargs.get("extra_pnginfo", {})
+                        elif param_name == "prompt_id":
+                            args["prompt_id"] = kwargs.get("prompt_id")
+            except Exception:
+                pass
+
             res = func(**args)
 
             # Handle UI results
