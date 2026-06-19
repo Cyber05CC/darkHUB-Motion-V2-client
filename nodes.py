@@ -169,7 +169,7 @@ def resolve_virtual_nodes(subgraph):
     virtual_nodes = {}
     normal_nodes = []
     for node in nodes_list:
-        if node.get("type") in ("SetNode", "GetNode"):
+        if node.get("type") in ("SetNode", "GetNode", "Reroute"):
             virtual_nodes[node["id"]] = node
         else:
             normal_nodes.append(node)
@@ -177,21 +177,78 @@ def resolve_virtual_nodes(subgraph):
     if not virtual_nodes:
         return subgraph
 
+    new_internal_links = []
+    resolved_link_ids_to_remove = set()
+
+    # 1. Resolve Reroute nodes
+    reroute_nodes = {nid: n for nid, n in virtual_nodes.items() if n["type"] == "Reroute"}
+    for reroute_id in list(reroute_nodes.keys()):
+        # Trace the source of the Reroute
+        source = None  # (origin_id, origin_slot) or ("external", ext_input_key)
+        for idx, link in enumerate(internal_links):
+            if link["target_id"] == reroute_id:
+                source = (link["origin_id"], link["origin_slot"])
+                resolved_link_ids_to_remove.add(idx)
+                break
+
+        if not source:
+            for ext_input_key, targets in list(inputs_map.items()):
+                for t in targets:
+                    if t[0] == reroute_id:
+                        source = ("external", ext_input_key)
+                        break
+                if source:
+                    break
+
+        if not source:
+            continue
+
+        # Trace the targets of the Reroute
+        targets = []
+        for idx, link in enumerate(internal_links):
+            if link["origin_id"] == reroute_id:
+                targets.append((link["target_id"], link["target_slot"]))
+                resolved_link_ids_to_remove.add(idx)
+        for ext_output_key, origin in list(outputs_map.items()):
+            if origin[0] == reroute_id:
+                targets.append(("external", ext_output_key))
+
+        # Connect source to targets
+        if source[0] == "external":
+            ext_input_key = source[1]
+            inputs_map[ext_input_key] = [t for t in inputs_map[ext_input_key] if t[0] != reroute_id]
+            for tgt in targets:
+                if tgt[0] != "external":
+                    inputs_map[ext_input_key].append([tgt[0], tgt[1]])
+        else:
+            src_id, src_slot = source
+            for tgt in targets:
+                if tgt[0] == "external":
+                    ext_output_key = tgt[1]
+                    outputs_map[ext_output_key] = [src_id, src_slot]
+                else:
+                    tgt_id, tgt_slot = tgt
+                    new_internal_links.append({
+                        "origin_id": src_id,
+                        "origin_slot": src_slot,
+                        "target_id": tgt_id,
+                        "target_slot": tgt_slot
+                    })
+
+    # 2. Resolve SetNode / GetNode
     set_nodes_by_name = {}
     get_nodes_by_name = {}
     for node_id, node in virtual_nodes.items():
-        var_name = get_var_name(node)
-        if not var_name:
-            continue
-        if node["type"] == "SetNode":
-            set_nodes_by_name[var_name] = node_id
-        elif node["type"] == "GetNode":
-            if var_name not in get_nodes_by_name:
-                get_nodes_by_name[var_name] = []
-            get_nodes_by_name[var_name].append(node_id)
-
-    new_internal_links = []
-    resolved_link_ids_to_remove = set()
+        if node["type"] in ("SetNode", "GetNode"):
+            var_name = get_var_name(node)
+            if not var_name:
+                continue
+            if node["type"] == "SetNode":
+                set_nodes_by_name[var_name] = node_id
+            elif node["type"] == "GetNode":
+                if var_name not in get_nodes_by_name:
+                    get_nodes_by_name[var_name] = []
+                get_nodes_by_name[var_name].append(node_id)
 
     for var_name, set_node_id in set_nodes_by_name.items():
         get_node_ids = get_nodes_by_name.get(var_name, [])
