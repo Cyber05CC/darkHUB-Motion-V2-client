@@ -278,6 +278,107 @@ async function packSelectedNodes(canvas) {
         outputIdx++;
     }
 
+    // --- RESOLVE VIRTUAL SET/GET BOUNDARY CROSSINGS ---
+    const allNodesOnGraph = canvas.graph._nodes || [];
+    const setNodes = allNodesOnGraph.filter(n => n.type === "SetNode");
+    const getNodes = allNodesOnGraph.filter(n => n.type === "GetNode");
+
+    function getVarName(node) {
+        if (node.widgets) {
+            for (const w of node.widgets) {
+                if (w.name === "value_name" || w.name === "constant_value" || w.name === "key" || w.name === "name") {
+                    return w.value;
+                }
+            }
+            if (node.widgets[0]) return node.widgets[0].value;
+        }
+        if (node.widgets_values && node.widgets_values[0]) {
+            return node.widgets_values[0];
+        }
+        if (node.properties && node.properties.previousName) {
+            return node.properties.previousName;
+        }
+        return null;
+    }
+
+    const setNodesByName = {};
+    for (const node of setNodes) {
+        const name = getVarName(node);
+        if (name) setNodesByName[name] = node;
+    }
+
+    for (const getNode of getNodes) {
+        const name = getVarName(getNode);
+        if (!name) continue;
+
+        const setNode = setNodesByName[name];
+        if (!setNode) continue;
+
+        const setIn = innerNodeIds.has(setNode.id);
+        const getIn = innerNodeIds.has(getNode.id);
+
+        if (setIn && !getIn) {
+            // SetNode inside selection, GetNode outside selection.
+            // This virtual connection crosses outward, so we map it as an external output of the subgraph.
+            const inputLink = setNode.inputs && setNode.inputs[0] ? canvas.graph.links[setNode.inputs[0].link] : null;
+            if (inputLink) {
+                const targets = [];
+                if (getNode.outputs && getNode.outputs[0] && getNode.outputs[0].links) {
+                    for (const lId of getNode.outputs[0].links) {
+                        const link = canvas.graph.links[lId];
+                        if (link) {
+                            targets.push({
+                                target_id: link.target_id,
+                                target_slot: link.target_slot
+                            });
+                        }
+                    }
+                }
+
+                if (targets.length > 0) {
+                    const outputName = `output_${outputIdx}`;
+                    nodeOutputs.push({
+                        name: outputName,
+                        type: inputLink.type,
+                        origin_id: inputLink.origin_id,
+                        origin_slot: inputLink.origin_slot,
+                        targets: targets
+                    });
+                    outputsMap[outputName] = [inputLink.origin_id, inputLink.origin_slot];
+                    outputIdx++;
+                }
+            }
+        } else if (!setIn && getIn) {
+            // SetNode outside selection, GetNode inside selection.
+            // This virtual connection crosses inward, so we map it as an external input to the subgraph.
+            const inputLink = setNode.inputs && setNode.inputs[0] ? canvas.graph.links[setNode.inputs[0].link] : null;
+            if (inputLink) {
+                const targets = [];
+                for (const linkId in canvas.graph.links) {
+                    const link = canvas.graph.links[linkId];
+                    if (link && link.origin_id === getNode.id) {
+                        targets.push({
+                            target_id: link.target_id,
+                            target_slot: link.target_slot
+                        });
+                    }
+                }
+
+                if (targets.length > 0) {
+                    const inputName = `input_${inputIdx}`;
+                    nodeInputs.push({
+                        name: inputName,
+                        type: inputLink.type,
+                        origin_id: inputLink.origin_id,
+                        origin_slot: inputLink.origin_slot
+                    });
+                    inputsMap[inputName] = targets.map(t => [t.target_id, t.target_slot]);
+                    inputIdx++;
+                }
+            }
+        }
+    }
+
     // Wrap subgraph structure
     const subgraphData = {
         nodes: subgraphNodes,
@@ -383,6 +484,16 @@ async function packSelectedNodes(canvas) {
     // Remove the original nodes from canvas
     for (const node of selectedNodes) {
         canvas.graph.remove(node);
+    }
+
+    // Also remove external GetNodes whose virtual connections were converted to real outputs
+    for (const getNode of getNodes) {
+        const name = getVarName(getNode);
+        if (!name) continue;
+        const setNode = setNodesByName[name];
+        if (setNode && innerNodeIds.has(setNode.id) && !innerNodeIds.has(getNode.id)) {
+            canvas.graph.remove(getNode);
+        }
     }
 
     // Focus on the newly created node
