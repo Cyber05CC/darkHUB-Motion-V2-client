@@ -476,6 +476,10 @@ class darkHUB_Subgraph:
 
             res = func(**args)
 
+            # Unwrap ComfyUI latest API wrapped outputs
+            if hasattr(res, "args") and isinstance(res.args, tuple):
+                res = res.args
+
             # Handle UI results
             if isinstance(res, dict) and "result" in res:
                 if "ui" in res:
