@@ -143,6 +143,145 @@ def get_subgraph_json(subgraph_data_str: str, key: str) -> dict:
     return json.loads(decrypted)
 
 
+def get_var_name(node_data):
+    widgets = node_data.get("widgets", {})
+    for k in ["value_name", "constant_value", "key", "name"]:
+        if k in widgets and isinstance(widgets[k], str):
+            return widgets[k]
+    for k, v in widgets.items():
+        if isinstance(v, str):
+            return v
+    widgets_values = node_data.get("widgets_values", [])
+    if widgets_values and isinstance(widgets_values[0], str):
+        return widgets_values[0]
+    properties = node_data.get("properties", {})
+    if "previousName" in properties:
+        return properties["previousName"]
+    return None
+
+
+def resolve_virtual_nodes(subgraph):
+    nodes_list = subgraph.get("nodes", [])
+    internal_links = subgraph.get("internal_links", [])
+    inputs_map = subgraph.get("inputs_map", {})
+    outputs_map = subgraph.get("outputs_map", {})
+
+    virtual_nodes = {}
+    normal_nodes = []
+    for node in nodes_list:
+        if node.get("type") in ("SetNode", "GetNode"):
+            virtual_nodes[node["id"]] = node
+        else:
+            normal_nodes.append(node)
+
+    if not virtual_nodes:
+        return subgraph
+
+    set_nodes_by_name = {}
+    get_nodes_by_name = {}
+    for node_id, node in virtual_nodes.items():
+        var_name = get_var_name(node)
+        if not var_name:
+            continue
+        if node["type"] == "SetNode":
+            set_nodes_by_name[var_name] = node_id
+        elif node["type"] == "GetNode":
+            if var_name not in get_nodes_by_name:
+                get_nodes_by_name[var_name] = []
+            get_nodes_by_name[var_name].append(node_id)
+
+    new_internal_links = []
+    resolved_link_ids_to_remove = set()
+
+    for var_name, set_node_id in set_nodes_by_name.items():
+        get_node_ids = get_nodes_by_name.get(var_name, [])
+
+        # 1. Trace the source of the SetNode
+        source = None  # (origin_id, origin_slot) or ("external", ext_input_key)
+        for idx, link in enumerate(internal_links):
+            if link["target_id"] == set_node_id:
+                source = (link["origin_id"], link["origin_slot"])
+                resolved_link_ids_to_remove.add(idx)
+                break
+
+        if not source:
+            for ext_input_key, targets in list(inputs_map.items()):
+                for t in targets:
+                    if t[0] == set_node_id:
+                        source = ("external", ext_input_key)
+                        break
+                if source:
+                    break
+
+        if not source:
+            continue
+
+        # 2. Trace the targets of the GetNodes and SetNode passthroughs
+        targets = []
+        for get_node_id in get_node_ids:
+            for idx, link in enumerate(internal_links):
+                if link["origin_id"] == get_node_id:
+                    targets.append((link["target_id"], link["target_slot"]))
+                    resolved_link_ids_to_remove.add(idx)
+            for ext_output_key, origin in list(outputs_map.items()):
+                if origin[0] == get_node_id:
+                    targets.append(("external", ext_output_key))
+
+        for idx, link in enumerate(internal_links):
+            if link["origin_id"] == set_node_id:
+                targets.append((link["target_id"], link["target_slot"]))
+                resolved_link_ids_to_remove.add(idx)
+        for ext_output_key, origin in list(outputs_map.items()):
+            if origin[0] == set_node_id:
+                targets.append(("external", ext_output_key))
+
+        # 3. Connect source to targets
+        if source[0] == "external":
+            ext_input_key = source[1]
+            inputs_map[ext_input_key] = [t for t in inputs_map[ext_input_key] if t[0] != set_node_id]
+            for tgt in targets:
+                if tgt[0] != "external":
+                    inputs_map[ext_input_key].append([tgt[0], tgt[1]])
+        else:
+            src_id, src_slot = source
+            for tgt in targets:
+                if tgt[0] == "external":
+                    ext_output_key = tgt[1]
+                    outputs_map[ext_output_key] = [src_id, src_slot]
+                else:
+                    tgt_id, tgt_slot = tgt
+                    new_internal_links.append({
+                        "origin_id": src_id,
+                        "origin_slot": src_slot,
+                        "target_id": tgt_id,
+                        "target_slot": tgt_slot
+                    })
+
+    # Clean up remaining internal links
+    cleaned_internal_links = [
+        link for idx, link in enumerate(internal_links)
+        if idx not in resolved_link_ids_to_remove
+        and link["origin_id"] not in virtual_nodes
+        and link["target_id"] not in virtual_nodes
+    ]
+    cleaned_internal_links.extend(new_internal_links)
+
+    # Clean up inputs_map targets referring to virtual nodes
+    for ext_input_key, targets in list(inputs_map.items()):
+        inputs_map[ext_input_key] = [t for t in targets if t[0] not in virtual_nodes]
+
+    # Clean up outputs_map referring to virtual nodes
+    for ext_output_key, origin in list(outputs_map.items()):
+        if origin[0] in virtual_nodes:
+            del outputs_map[ext_output_key]
+
+    subgraph["nodes"] = normal_nodes
+    subgraph["internal_links"] = cleaned_internal_links
+    subgraph["inputs_map"] = inputs_map
+    subgraph["outputs_map"] = outputs_map
+    return subgraph
+
+
 class darkHUB_Subgraph:
     @classmethod
     def INPUT_TYPES(s):
@@ -166,6 +305,7 @@ class darkHUB_Subgraph:
     def IS_CHANGED(s, key, subgraph_data, **kwargs):
         try:
             subgraph = get_subgraph_json(subgraph_data, key)
+            subgraph = resolve_virtual_nodes(subgraph)
         except Exception:
             return float("nan")
 
@@ -209,6 +349,7 @@ class darkHUB_Subgraph:
 
         # 2. Decrypt the subgraph data
         subgraph = get_subgraph_json(subgraph_data, key)
+        subgraph = resolve_virtual_nodes(subgraph)
 
         nodes_list = subgraph.get("nodes", [])
         internal_links = subgraph.get("internal_links", [])
