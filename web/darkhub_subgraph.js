@@ -444,7 +444,7 @@ async function packSelectedNodes(canvas) {
         }
     }
     // Remove extra inputs
-    for (let i = 29; i >= activeInputCount; i--) {
+    for (let i = darkhubNode.inputs.length - 1; i >= activeInputCount; i--) {
         darkhubNode.removeInput(i);
     }
 
@@ -457,7 +457,7 @@ async function packSelectedNodes(canvas) {
         }
     }
     // Remove extra outputs
-    for (let i = 29; i >= activeOutputCount; i--) {
+    for (let i = darkhubNode.outputs.length - 1; i >= activeOutputCount; i--) {
         darkhubNode.removeOutput(i);
     }
 

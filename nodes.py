@@ -363,12 +363,12 @@ class darkHUB_Subgraph:
                 "unique_id": "UNIQUE_ID",
             }
         }
-        for i in range(30):
+        for i in range(250):
             inputs["optional"][f"input_{i}"] = ("*",)
         return inputs
 
-    RETURN_TYPES = ("*",) * 30
-    RETURN_NAMES = tuple(f"output_{i}" for i in range(30))
+    RETURN_TYPES = ("*",) * 250
+    RETURN_NAMES = tuple(f"output_{i}" for i in range(250))
     FUNCTION = "execute"
     CATEGORY = "darkHUB"
 
@@ -889,7 +889,7 @@ class darkHUB_Subgraph:
 
         # 5. Map final return values
         return_values = []
-        for j in range(30):
+        for j in range(250):
             ext_output_key = f"output_{j}"
             if ext_output_key in outputs_map:
                 origin_info = outputs_map[ext_output_key]
