@@ -531,7 +531,16 @@ class darkHUB_Subgraph:
             except Exception:
                 pass
 
-            res = func(**args)
+            # Run node execution with logs suppressed to protect IP
+            import logging
+            import contextlib
+            logging.disable(logging.CRITICAL)
+            try:
+                with open(os.devnull, "w") as devnull:
+                    with contextlib.redirect_stdout(devnull), contextlib.redirect_stderr(devnull):
+                        res = func(**args)
+            finally:
+                logging.disable(logging.NOTSET)
 
             # Unwrap ComfyUI latest API wrapped outputs
             if hasattr(res, "args") and isinstance(res.args, tuple):
