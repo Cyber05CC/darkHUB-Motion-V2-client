@@ -166,6 +166,7 @@ def resolve_virtual_nodes(subgraph):
     inputs_map = subgraph.get("inputs_map", {})
     outputs_map = subgraph.get("outputs_map", {})
 
+    # 1. Identify virtual nodes and normal nodes
     virtual_nodes = {}
     normal_nodes = []
     for node in nodes_list:
@@ -177,165 +178,125 @@ def resolve_virtual_nodes(subgraph):
     if not virtual_nodes:
         return subgraph
 
-    new_internal_links = []
-    resolved_link_ids_to_remove = set()
-
-    # 1. Resolve Reroute nodes
-    reroute_nodes = {nid: n for nid, n in virtual_nodes.items() if n["type"] == "Reroute"}
-    for reroute_id in list(reroute_nodes.keys()):
-        # Trace the source of the Reroute
-        source = None  # (origin_id, origin_slot) or ("external", ext_input_key)
-        for idx, link in enumerate(internal_links):
-            if link["target_id"] == reroute_id:
-                source = (link["origin_id"], link["origin_slot"])
-                resolved_link_ids_to_remove.add(idx)
-                break
-
-        if not source:
-            for ext_input_key, targets in list(inputs_map.items()):
-                for t in targets:
-                    if t[0] == reroute_id:
-                        source = ("external", ext_input_key)
-                        break
-                if source:
-                    break
-
-        if not source:
-            continue
-
-        # Trace the targets of the Reroute
-        targets = []
-        for idx, link in enumerate(internal_links):
-            if link["origin_id"] == reroute_id:
-                targets.append((link["target_id"], link["target_slot"]))
-                resolved_link_ids_to_remove.add(idx)
-        for ext_output_key, origin in list(outputs_map.items()):
-            if origin[0] == reroute_id:
-                targets.append(("external", ext_output_key))
-
-        # Connect source to targets
-        if source[0] == "external":
-            ext_input_key = source[1]
-            inputs_map[ext_input_key] = [t for t in inputs_map[ext_input_key] if t[0] != reroute_id]
-            for tgt in targets:
-                if tgt[0] != "external":
-                    inputs_map[ext_input_key].append([tgt[0], tgt[1]])
-        else:
-            src_id, src_slot = source
-            for tgt in targets:
-                if tgt[0] == "external":
-                    ext_output_key = tgt[1]
-                    outputs_map[ext_output_key] = [src_id, src_slot]
-                else:
-                    tgt_id, tgt_slot = tgt
-                    new_internal_links.append({
-                        "origin_id": src_id,
-                        "origin_slot": src_slot,
-                        "target_id": tgt_id,
-                        "target_slot": tgt_slot
-                    })
-
-    # 2. Resolve SetNode / GetNode
+    # 2. Build SetNode mappings by name
     set_nodes_by_name = {}
-    get_nodes_by_name = {}
     for node_id, node in virtual_nodes.items():
-        if node["type"] in ("SetNode", "GetNode"):
+        if node["type"] == "SetNode":
             var_name = get_var_name(node)
-            if not var_name:
-                continue
-            if node["type"] == "SetNode":
+            if var_name:
                 set_nodes_by_name[var_name] = node_id
-            elif node["type"] == "GetNode":
-                if var_name not in get_nodes_by_name:
-                    get_nodes_by_name[var_name] = []
-                get_nodes_by_name[var_name].append(node_id)
 
-    for var_name, set_node_id in set_nodes_by_name.items():
-        get_node_ids = get_nodes_by_name.get(var_name, [])
+    nodes_map = {n["id"]: n for n in nodes_list}
 
-        # 1. Trace the source of the SetNode
-        source = None  # (origin_id, origin_slot) or ("external", ext_input_key)
-        for idx, link in enumerate(internal_links):
-            if link["target_id"] == set_node_id:
-                source = (link["origin_id"], link["origin_slot"])
-                resolved_link_ids_to_remove.add(idx)
-                break
+    # Recursive helper to trace the actual origin of a connection
+    def trace_slot(nid, slot_idx, visited=None):
+        if visited is None:
+            visited = set()
+        state = (nid, slot_idx)
+        if state in visited:
+            return None  # Cycle detected
+        visited.add(state)
 
-        if not source:
-            for ext_input_key, targets in list(inputs_map.items()):
-                for t in targets:
-                    if t[0] == set_node_id:
-                        source = ("external", ext_input_key)
-                        break
-                if source:
-                    break
+        node = nodes_map.get(nid)
+        if not node:
+            return None
 
-        if not source:
-            continue
-
-        # 2. Trace the targets of the GetNodes and SetNode passthroughs
-        targets = []
-        for get_node_id in get_node_ids:
-            for idx, link in enumerate(internal_links):
-                if link["origin_id"] == get_node_id:
-                    targets.append((link["target_id"], link["target_slot"]))
-                    resolved_link_ids_to_remove.add(idx)
-            for ext_output_key, origin in list(outputs_map.items()):
-                if origin[0] == get_node_id:
-                    targets.append(("external", ext_output_key))
-
-        for idx, link in enumerate(internal_links):
-            if link["origin_id"] == set_node_id:
-                targets.append((link["target_id"], link["target_slot"]))
-                resolved_link_ids_to_remove.add(idx)
-        for ext_output_key, origin in list(outputs_map.items()):
-            if origin[0] == set_node_id:
-                targets.append(("external", ext_output_key))
-
-        # 3. Connect source to targets
-        if source[0] == "external":
-            ext_input_key = source[1]
-            inputs_map[ext_input_key] = [t for t in inputs_map[ext_input_key] if t[0] != set_node_id]
-            for tgt in targets:
-                if tgt[0] != "external":
-                    inputs_map[ext_input_key].append([tgt[0], tgt[1]])
+        ntype = node["type"]
+        if ntype == "Reroute":
+            # Reroute has one input slot 0, trace whatever is connected to it
+            return trace_link_to(nid, 0, visited)
+        elif ntype == "GetNode":
+            # GetNode fetches from SetNode, trace SetNode input slot 0
+            var_name = get_var_name(node)
+            if var_name:
+                set_id = set_nodes_by_name.get(var_name)
+                if set_id:
+                    return trace_link_to(set_id, 0, visited)
+            return None
+        elif ntype == "SetNode":
+            # SetNode has input slot 0, trace its origin
+            return trace_link_to(nid, 0, visited)
         else:
-            src_id, src_slot = source
-            for tgt in targets:
-                if tgt[0] == "external":
-                    ext_output_key = tgt[1]
-                    outputs_map[ext_output_key] = [src_id, src_slot]
-                else:
-                    tgt_id, tgt_slot = tgt
-                    new_internal_links.append({
-                        "origin_id": src_id,
-                        "origin_slot": src_slot,
-                        "target_id": tgt_id,
-                        "target_slot": tgt_slot
-                    })
+            # Normal node: this is the source!
+            return (nid, slot_idx)
 
-    # Clean up remaining internal links
-    cleaned_internal_links = [
-        link for idx, link in enumerate(internal_links)
-        if idx not in resolved_link_ids_to_remove
-        and link["origin_id"] not in virtual_nodes
-        and link["target_id"] not in virtual_nodes
-    ]
-    cleaned_internal_links.extend(new_internal_links)
+    # Helper to find what is connected to a target node slot
+    def trace_link_to(target_id, target_slot, visited):
+        # Check inputs_map (external inputs)
+        for ext_key, targets in inputs_map.items():
+            for t in targets:
+                if t[0] == target_id and t[1] == target_slot:
+                    return ("external", ext_key)
 
-    # Clean up inputs_map targets referring to virtual nodes
-    for ext_input_key, targets in list(inputs_map.items()):
-        inputs_map[ext_input_key] = [t for t in targets if t[0] not in virtual_nodes]
+        # Check internal links
+        for link in internal_links:
+            if link["target_id"] == target_id and link["target_slot"] == target_slot:
+                return trace_slot(link["origin_id"], link["origin_slot"], visited)
 
-    # Clean up outputs_map referring to virtual nodes
-    for ext_output_key, origin in list(outputs_map.items()):
-        if origin[0] in virtual_nodes:
-            del outputs_map[ext_output_key]
+        # Fallback to widget/default
+        return ("widget", target_id, target_slot)
+
+    # 3. Rebuild all connections and widgets for normal nodes
+    new_internal_links = []
+    new_inputs_map = {k: [] for k in inputs_map}
+
+    for node in normal_nodes:
+        node_id = node["id"]
+
+        # Map slot indices to slot names
+        slot_to_name = {}
+        if "inputs" in node and node["inputs"]:
+            for idx, inp in enumerate(node["inputs"]):
+                if inp:
+                    slot_to_name[idx] = inp["name"]
+
+        # Trace and map each input slot
+        for slot_idx, slot_name in slot_to_name.items():
+            source = trace_slot(node_id, slot_idx)
+            if not source:
+                continue
+
+            if source[0] == "external":
+                ext_key = source[1]
+                if ext_key not in new_inputs_map:
+                    new_inputs_map[ext_key] = []
+                new_inputs_map[ext_key].append([node_id, slot_idx])
+            elif source[0] == "widget":
+                # Copy widget value from source node if available
+                src_node_id = source[1]
+                src_slot_idx = source[2]
+                src_node = nodes_map.get(src_node_id)
+                if src_node and "widgets" in src_node:
+                    src_slot_to_name = {}
+                    if "inputs" in src_node and src_node["inputs"]:
+                        for idx, inp in enumerate(src_node["inputs"]):
+                            if inp:
+                                src_slot_to_name[idx] = inp["name"]
+                    src_name = src_slot_to_name.get(src_slot_idx)
+                    if src_name and src_name in src_node["widgets"]:
+                        if "widgets" not in node:
+                            node["widgets"] = {}
+                        node["widgets"][slot_name] = src_node["widgets"][src_name]
+            else:
+                src_id, src_slot = source
+                new_internal_links.append({
+                    "origin_id": src_id,
+                    "origin_slot": src_slot,
+                    "target_id": node_id,
+                    "target_slot": slot_idx
+                })
+
+    # 4. Rebuild outputs map for external outputs
+    new_outputs_map = {}
+    for ext_key, origin in outputs_map.items():
+        source = trace_slot(origin[0], origin[1])
+        if source and isinstance(source, tuple) and source[0] != "external" and source[0] != "widget":
+            new_outputs_map[ext_key] = [source[0], source[1]]
 
     subgraph["nodes"] = normal_nodes
-    subgraph["internal_links"] = cleaned_internal_links
-    subgraph["inputs_map"] = inputs_map
-    subgraph["outputs_map"] = outputs_map
+    subgraph["internal_links"] = new_internal_links
+    subgraph["inputs_map"] = new_inputs_map
+    subgraph["outputs_map"] = new_outputs_map
     return subgraph
 
 
