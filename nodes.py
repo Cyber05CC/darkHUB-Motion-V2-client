@@ -513,6 +513,16 @@ class darkHUB_Subgraph:
 
             for input_name in all_input_names:
                 input_def = required_inputs.get(input_name) or optional_inputs.get(input_name)
+                # Determine if this input expects a raw link (e.g. for flow control in loops)
+                is_raw_link = False
+                if input_def is not None:
+                    if isinstance(input_def, (tuple, list)) and len(input_def) > 1 and isinstance(input_def[1], dict):
+                        is_raw_link = input_def[1].get("raw_link", False) or input_def[1].get("rawLink", False)
+                    elif hasattr(input_def, "raw_link"):
+                        is_raw_link = getattr(input_def, "raw_link", False)
+                    elif hasattr(input_def, "rawLink"):
+                        is_raw_link = getattr(input_def, "rawLink", False)
+
                 # Check if this input name is an Autogrow plural input (e.g. images, latents, masks)
                 is_autogrow = False
                 prefix_prefix = f"{input_name}."
@@ -536,7 +546,19 @@ class darkHUB_Subgraph:
                                     except Exception:
                                         t_slot = target[1]
                                     if str(target[0]) == str(node_id) and t_slot == slot_idx:
-                                        val = kwargs.get(ext_input_key)
+                                        if is_raw_link:
+                                            prompt = kwargs.get("prompt", {})
+                                            unique_id = kwargs.get("unique_id")
+                                            val = None
+                                            if prompt and unique_id and str(unique_id) in prompt:
+                                                node_info = prompt[str(unique_id)]
+                                                inputs_info = node_info.get("inputs", {})
+                                                if ext_input_key in inputs_info:
+                                                    val = inputs_info[ext_input_key]
+                                            if val is None:
+                                                val = kwargs.get(ext_input_key)
+                                        else:
+                                            val = kwargs.get(ext_input_key)
                                         found = True
                                         break
                                 if found:
@@ -552,7 +574,10 @@ class darkHUB_Subgraph:
                                     if str(link["target_id"]) == str(node_id) and l_target_slot == slot_idx:
                                         origin_id = link["origin_id"]
                                         o_slot = link["origin_slot"]
-                                        val = cache.get((origin_id, o_slot))
+                                        if is_raw_link:
+                                            val = [origin_id, o_slot]
+                                        else:
+                                            val = cache.get((origin_id, o_slot))
                                         found = True
                                         break
 
@@ -580,7 +605,19 @@ class darkHUB_Subgraph:
                             except Exception:
                                 slot_idx = target[1]
                             if slot_to_input_name.get(slot_idx) == input_name:
-                                val = kwargs.get(ext_input_key)
+                                if is_raw_link:
+                                    prompt = kwargs.get("prompt", {})
+                                    unique_id = kwargs.get("unique_id")
+                                    val = None
+                                    if prompt and unique_id and str(unique_id) in prompt:
+                                        node_info = prompt[str(unique_id)]
+                                        inputs_info = node_info.get("inputs", {})
+                                        if ext_input_key in inputs_info:
+                                            val = inputs_info[ext_input_key]
+                                    if val is None:
+                                        val = kwargs.get(ext_input_key)
+                                else:
+                                    val = kwargs.get(ext_input_key)
                                 found = True
                                 break
                     if found:
@@ -597,7 +634,10 @@ class darkHUB_Subgraph:
                             if slot_to_input_name.get(t_slot) == input_name:
                                 origin_id = link["origin_id"]
                                 o_slot = link["origin_slot"]
-                                val = cache.get((origin_id, o_slot))
+                                if is_raw_link:
+                                    val = [origin_id, o_slot]
+                                else:
+                                    val = cache.get((origin_id, o_slot))
                                 found = True
                                 break
 
