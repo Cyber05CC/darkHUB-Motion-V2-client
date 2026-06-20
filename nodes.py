@@ -472,6 +472,55 @@ class darkHUB_Subgraph:
             # Resolve arguments
             args = {}
             for input_name, input_def in {**required_inputs, **optional_inputs}.items():
+                # Check if this input name is an Autogrow plural input (e.g. images, latents, masks)
+                is_autogrow = False
+                prefix = ""
+                if input_name.endswith("s"):
+                    prefix = input_name[:-1]
+                    for slot_name in slot_to_input_name.values():
+                        if slot_name.startswith(prefix) and slot_name[len(prefix):].isdigit():
+                            is_autogrow = True
+                            break
+
+                if is_autogrow:
+                    autogrow_dict = {}
+                    for slot_idx, slot_name in slot_to_input_name.items():
+                        if slot_name.startswith(prefix) and slot_name[len(prefix):].isdigit():
+                            val = None
+                            found = False
+
+                            # 1. External inputs mapping
+                            for ext_input_key, targets in inputs_map.items():
+                                for target in targets:
+                                    if target[0] == node_id and target[1] == slot_idx:
+                                        val = kwargs.get(ext_input_key)
+                                        found = True
+                                        break
+                                if found:
+                                    break
+
+                            # 2. Internal link connections
+                            if not found:
+                                for link in internal_links:
+                                    if link["target_id"] == node_id and link["target_slot"] == slot_idx:
+                                        origin_id = link["origin_id"]
+                                        o_slot = link["origin_slot"]
+                                        val = cache.get((origin_id, o_slot))
+                                        found = True
+                                        break
+
+                            # 3. Serialized widgets
+                            if not found:
+                                serialized_widgets = node_data.get("widgets", {})
+                                if slot_name in serialized_widgets:
+                                    val = serialized_widgets[slot_name]
+                                    found = True
+
+                            if found:
+                                autogrow_dict[slot_name] = val
+                    args[input_name] = autogrow_dict
+                    continue
+
                 val = None
                 found = False
 
