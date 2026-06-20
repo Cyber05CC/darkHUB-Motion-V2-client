@@ -166,12 +166,16 @@ def resolve_virtual_nodes(subgraph):
     inputs_map = subgraph.get("inputs_map", {})
     outputs_map = subgraph.get("outputs_map", {})
 
+    # Map all node IDs to strings for robust lookup, but keep original IDs for output
+    id_to_orig = {str(n["id"]): n["id"] for n in nodes_list}
+
     # 1. Identify virtual nodes and normal nodes
     virtual_nodes = {}
     normal_nodes = []
     for node in nodes_list:
+        nid_str = str(node["id"])
         if node.get("type") in ("SetNode", "GetNode", "Reroute"):
-            virtual_nodes[node["id"]] = node
+            virtual_nodes[nid_str] = node
         else:
             normal_nodes.append(node)
 
@@ -180,79 +184,96 @@ def resolve_virtual_nodes(subgraph):
 
     # 2. Build SetNode mappings by name
     set_nodes_by_name = {}
-    for node_id, node in virtual_nodes.items():
+    for node_id_str, node in virtual_nodes.items():
         if node["type"] == "SetNode":
             var_name = get_var_name(node)
             if var_name:
-                set_nodes_by_name[var_name] = node_id
+                set_nodes_by_name[var_name] = node_id_str
 
-    nodes_map = {n["id"]: n for n in nodes_list}
+    nodes_map = {str(n["id"]): n for n in nodes_list}
 
     # Recursive helper to trace the actual origin of a connection
     def trace_slot(nid, slot_idx, visited=None):
+        nid_str = str(nid)
+        try:
+            slot_idx = int(slot_idx)
+        except Exception:
+            pass
         if visited is None:
             visited = set()
-        state = (nid, slot_idx)
+        state = (nid_str, slot_idx)
         if state in visited:
             return None  # Cycle detected
         visited.add(state)
 
-        node = nodes_map.get(nid)
+        node = nodes_map.get(nid_str)
         if not node:
             return None
 
         ntype = node["type"]
         if ntype == "Reroute":
-            # Reroute has one input slot 0, trace whatever is connected to it
-            return trace_link_to(nid, 0, visited)
+            return trace_link_to(nid_str, 0, visited)
         elif ntype == "GetNode":
-            # GetNode fetches from SetNode, trace SetNode input slot 0
             var_name = get_var_name(node)
             if var_name:
-                set_id = set_nodes_by_name.get(var_name)
-                if set_id:
-                    return trace_link_to(set_id, 0, visited)
+                set_id_str = set_nodes_by_name.get(var_name)
+                if set_id_str:
+                    return trace_link_to(set_id_str, 0, visited)
             return None
         elif ntype == "SetNode":
-            # SetNode has input slot 0, trace its origin
-            return trace_link_to(nid, 0, visited)
+            return trace_link_to(nid_str, 0, visited)
         else:
             # Normal node: this is the source!
-            return (nid, slot_idx)
+            return (nid_str, slot_idx)
 
     # Helper to find what is connected to a target node slot
     def trace_link_to(target_id, target_slot, visited):
+        target_id_str = str(target_id)
+        try:
+            target_slot = int(target_slot)
+        except Exception:
+            pass
+        
         # Check inputs_map (external inputs)
         for ext_key, targets in inputs_map.items():
             for t in targets:
-                if t[0] == target_id and t[1] == target_slot:
+                try:
+                    t_slot = int(t[1])
+                except Exception:
+                    t_slot = t[1]
+                if str(t[0]) == target_id_str and t_slot == target_slot:
                     return ("external", ext_key)
 
         # Check internal links
         for link in internal_links:
-            if link["target_id"] == target_id and link["target_slot"] == target_slot:
+            try:
+                l_target_slot = int(link["target_slot"])
+            except Exception:
+                l_target_slot = link["target_slot"]
+            if str(link["target_id"]) == target_id_str and l_target_slot == target_slot:
                 return trace_slot(link["origin_id"], link["origin_slot"], visited)
 
         # Fallback to widget/default
-        return ("widget", target_id, target_slot)
+        return ("widget", target_id_str, target_slot)
 
     # 3. Rebuild all connections and widgets for normal nodes
     new_internal_links = []
     new_inputs_map = {k: [] for k in inputs_map}
 
     for node in normal_nodes:
-        node_id = node["id"]
+        node_id_str = str(node["id"])
+        orig_node_id = id_to_orig[node_id_str]
 
         # Map slot indices to slot names
         slot_to_name = {}
         if "inputs" in node and node["inputs"]:
             for idx, inp in enumerate(node["inputs"]):
                 if inp:
-                    slot_to_name[idx] = inp["name"]
+                    slot_to_name[int(idx)] = inp["name"]
 
         # Trace and map each input slot
         for slot_idx, slot_name in slot_to_name.items():
-            source = trace_link_to(node_id, slot_idx, None)
+            source = trace_link_to(node_id_str, slot_idx, None)
             if not source:
                 continue
 
@@ -260,30 +281,56 @@ def resolve_virtual_nodes(subgraph):
                 ext_key = source[1]
                 if ext_key not in new_inputs_map:
                     new_inputs_map[ext_key] = []
-                new_inputs_map[ext_key].append([node_id, slot_idx])
+                new_inputs_map[ext_key].append([orig_node_id, slot_idx])
             elif source[0] == "widget":
                 # Copy widget value from source node if available
-                src_node_id = source[1]
-                src_slot_idx = source[2]
-                src_node = nodes_map.get(src_node_id)
-                if src_node and "widgets" in src_node:
+                src_node_id_str = str(source[1])
+                src_slot_idx = int(source[2])
+                src_node = nodes_map.get(src_node_id_str)
+                if src_node and ("widgets" in src_node or "widgets_values" in src_node):
                     src_slot_to_name = {}
                     if "inputs" in src_node and src_node["inputs"]:
                         for idx, inp in enumerate(src_node["inputs"]):
                             if inp:
-                                src_slot_to_name[idx] = inp["name"]
+                                src_slot_to_name[int(idx)] = inp["name"]
                     src_name = src_slot_to_name.get(src_slot_idx)
-                    if src_name and src_name in src_node["widgets"]:
+                    
+                    val = None
+                    found_val = False
+                    
+                    if "widgets" in src_node and isinstance(src_node["widgets"], dict) and src_name in src_node["widgets"]:
+                        val = src_node["widgets"][src_name]
+                        found_val = True
+                    elif "widgets_values" in src_node and src_node["widgets_values"]:
+                        src_type = src_node.get("type")
+                        if src_type in nodes.NODE_CLASS_MAPPINGS:
+                            src_class = nodes.NODE_CLASS_MAPPINGS[src_type]
+                            try:
+                                src_input_types = src_class.INPUT_TYPES()
+                                widget_names = []
+                                for group in ["required", "optional"]:
+                                    for k in src_input_types.get(group, {}).keys():
+                                        widget_names.append(k)
+                                
+                                if src_name in widget_names:
+                                    w_idx = widget_names.index(src_name)
+                                    if w_idx < len(src_node["widgets_values"]):
+                                        val = src_node["widgets_values"][w_idx]
+                                        found_val = True
+                            except Exception:
+                                pass
+                                
+                    if found_val:
                         if "widgets" not in node:
                             node["widgets"] = {}
-                        node["widgets"][slot_name] = src_node["widgets"][src_name]
+                        node["widgets"][slot_name] = val
             else:
-                src_id, src_slot = source
+                src_id_str, src_slot = source
                 new_internal_links.append({
-                    "origin_id": src_id,
-                    "origin_slot": src_slot,
-                    "target_id": node_id,
-                    "target_slot": slot_idx
+                    "origin_id": id_to_orig[src_id_str],
+                    "origin_slot": int(src_slot),
+                    "target_id": orig_node_id,
+                    "target_slot": int(slot_idx)
                 })
 
     # 4. Rebuild outputs map for external outputs
@@ -291,7 +338,8 @@ def resolve_virtual_nodes(subgraph):
     for ext_key, origin in outputs_map.items():
         source = trace_slot(origin[0], origin[1])
         if source and isinstance(source, tuple) and source[0] != "external" and source[0] != "widget":
-            new_outputs_map[ext_key] = [source[0], source[1]]
+            src_id_str, src_slot = source
+            new_outputs_map[ext_key] = [id_to_orig[src_id_str], int(src_slot)]
 
     subgraph["nodes"] = normal_nodes
     subgraph["internal_links"] = new_internal_links
@@ -429,7 +477,7 @@ class darkHUB_Subgraph:
             if "inputs" in node_data and node_data["inputs"]:
                 for idx, inp in enumerate(node_data["inputs"]):
                     if inp:
-                        slot_to_input_name[idx] = inp["name"]
+                        slot_to_input_name[int(idx)] = inp["name"]
 
             input_types = node_class.INPUT_TYPES()
             required_inputs = input_types.get("required", {})
@@ -442,6 +490,30 @@ class darkHUB_Subgraph:
             for slot_name in slot_to_input_name.values():
                 if "." not in slot_name:
                     all_input_names.add(slot_name)
+
+            # Build a merged dictionary of all widget values for this node
+            serialized_widgets = {}
+            if "widgets" in node_data and isinstance(node_data["widgets"], dict):
+                serialized_widgets.update(node_data["widgets"])
+            
+            # If widgets is empty or missing, reconstruct it from widgets_values
+            if "widgets_values" in node_data and node_data["widgets_values"]:
+                try:
+                    # Map names in order of INPUT_TYPES required and optional
+                    widget_names = []
+                    for group in ["required", "optional"]:
+                        for k in input_types.get(group, {}).keys():
+                            widget_names.append(k)
+                    
+                    for w_idx, w_name in enumerate(widget_names):
+                        if w_idx < len(node_data["widgets_values"]):
+                            serialized_widgets[w_name] = node_data["widgets_values"][w_idx]
+                except Exception:
+                    pass
+
+            for w_name in serialized_widgets.keys():
+                if "." not in w_name:
+                    all_input_names.add(w_name)
 
             for input_name in all_input_names:
                 input_def = required_inputs.get(input_name) or optional_inputs.get(input_name)
@@ -463,7 +535,11 @@ class darkHUB_Subgraph:
                             # 1. External inputs mapping
                             for ext_input_key, targets in inputs_map.items():
                                 for target in targets:
-                                    if target[0] == node_id and target[1] == slot_idx:
+                                    try:
+                                        t_slot = int(target[1])
+                                    except Exception:
+                                        t_slot = target[1]
+                                    if str(target[0]) == str(node_id) and t_slot == slot_idx:
                                         val = kwargs.get(ext_input_key)
                                         found = True
                                         break
@@ -473,7 +549,11 @@ class darkHUB_Subgraph:
                             # 2. Internal link connections
                             if not found:
                                 for link in internal_links:
-                                    if link["target_id"] == node_id and link["target_slot"] == slot_idx:
+                                    try:
+                                        l_target_slot = int(link["target_slot"])
+                                    except Exception:
+                                        l_target_slot = link["target_slot"]
+                                    if str(link["target_id"]) == str(node_id) and l_target_slot == slot_idx:
                                         origin_id = link["origin_id"]
                                         o_slot = link["origin_slot"]
                                         val = cache.get((origin_id, o_slot))
@@ -482,7 +562,6 @@ class darkHUB_Subgraph:
 
                             # 3. Serialized widgets
                             if not found:
-                                serialized_widgets = node_data.get("widgets", {})
                                 if slot_name in serialized_widgets:
                                     val = serialized_widgets[slot_name]
                                     found = True
@@ -498,8 +577,11 @@ class darkHUB_Subgraph:
                 # 1. External inputs mapping
                 for ext_input_key, targets in inputs_map.items():
                     for target in targets:
-                        if target[0] == node_id:
-                            slot_idx = target[1]
+                        if str(target[0]) == str(node_id):
+                            try:
+                                slot_idx = int(target[1])
+                            except Exception:
+                                slot_idx = target[1]
                             if slot_to_input_name.get(slot_idx) == input_name:
                                 val = kwargs.get(ext_input_key)
                                 found = True
@@ -510,8 +592,11 @@ class darkHUB_Subgraph:
                 # 2. Internal link connections
                 if not found:
                     for link in internal_links:
-                        if link["target_id"] == node_id:
-                            t_slot = link["target_slot"]
+                        if str(link["target_id"]) == str(node_id):
+                            try:
+                                t_slot = int(link["target_slot"])
+                            except Exception:
+                                t_slot = link["target_slot"]
                             if slot_to_input_name.get(t_slot) == input_name:
                                 origin_id = link["origin_id"]
                                 o_slot = link["origin_slot"]
@@ -521,7 +606,6 @@ class darkHUB_Subgraph:
 
                 # 3. Serialized widgets
                 if not found:
-                    serialized_widgets = node_data.get("widgets", {})
                     if input_name in serialized_widgets:
                         val = serialized_widgets[input_name]
                         found = True
