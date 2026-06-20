@@ -511,10 +511,6 @@ class darkHUB_Subgraph:
                 except Exception:
                     pass
 
-            for w_name in serialized_widgets.keys():
-                if "." not in w_name:
-                    all_input_names.add(w_name)
-
             for input_name in all_input_names:
                 input_def = required_inputs.get(input_name) or optional_inputs.get(input_name)
                 # Check if this input name is an Autogrow plural input (e.g. images, latents, masks)
