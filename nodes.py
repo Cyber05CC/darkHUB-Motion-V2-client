@@ -488,6 +488,7 @@ class darkHUB_Subgraph:
             args = {}
             raw_link_inputs = set()
             mapped_list_inputs = set()
+            external_inputs = set()
             # Combine static inputs with actual slots present on the node (e.g., dynamic inputs like a, b in Math nodes)
             all_input_names = set(required_inputs.keys()) | set(optional_inputs.keys())
             for slot_name in slot_to_input_name.values():
@@ -563,6 +564,7 @@ class darkHUB_Subgraph:
                                             raw_link_inputs.add(input_name)
                                         else:
                                             val = kwargs.get(ext_input_key)
+                                            external_inputs.add(input_name)
                                         found = True
                                         break
                                 if found:
@@ -626,6 +628,7 @@ class darkHUB_Subgraph:
                                     raw_link_inputs.add(input_name)
                                 else:
                                     val = kwargs.get(ext_input_key)
+                                    external_inputs.add(input_name)
                                 found = True
                                 break
                     if found:
@@ -747,10 +750,11 @@ class darkHUB_Subgraph:
             list_keys = []
             for k, v in args.items():
                 if isinstance(v, list) and not input_is_list:
-                    if k not in raw_link_inputs and k in mapped_list_inputs:
-                        list_keys.append(k)
-                        if len(v) > map_len:
-                            map_len = len(v)
+                    if k not in raw_link_inputs:
+                        if k in mapped_list_inputs or k in external_inputs:
+                            list_keys.append(k)
+                            if len(v) > map_len:
+                                map_len = len(v)
 
             # Run node execution
             try:
