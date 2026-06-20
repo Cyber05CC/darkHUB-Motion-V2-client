@@ -347,7 +347,12 @@ class darkHUB_Subgraph:
                 "key": ("STRING", {"default": ""}),
                 "subgraph_data": ("STRING", {"default": "", "multiline": True}),
             },
-            "optional": {}
+            "optional": {},
+            "hidden": {
+                "prompt": "PROMPT",
+                "extra_pnginfo": "EXTRA_PNGINFO",
+                "unique_id": "UNIQUE_ID",
+            }
         }
         for i in range(30):
             inputs["optional"][f"input_{i}"] = ("*",)
@@ -608,6 +613,32 @@ class darkHUB_Subgraph:
             except Exception:
                 pass
 
+            # Mock and inject V3 API `hidden` context
+            orig_class_hidden = getattr(node_class, "hidden", None)
+            orig_instance_hidden = getattr(node_instance, "hidden", None)
+            
+            class MockHidden:
+                def __init__(self, unique_id, prompt=None, extra_pnginfo=None):
+                    self.unique_id = unique_id
+                    self.prompt = prompt if prompt is not None else {}
+                    self.extra_pnginfo = extra_pnginfo if extra_pnginfo is not None else {}
+                def __getattr__(self, name):
+                    return None
+
+            mock_hidden = MockHidden(
+                str(node_id),
+                kwargs.get("prompt"),
+                kwargs.get("extra_pnginfo")
+            )
+            try:
+                node_class.hidden = mock_hidden
+            except AttributeError:
+                pass
+            try:
+                node_instance.hidden = mock_hidden
+            except AttributeError:
+                pass
+
             # Run node execution with logs suppressed to protect IP
             import logging
             import contextlib
@@ -618,6 +649,27 @@ class darkHUB_Subgraph:
                         res = func(**args)
             finally:
                 logging.disable(logging.NOTSET)
+                # Restore original hidden attributes
+                try:
+                    if orig_class_hidden is not None:
+                        node_class.hidden = orig_class_hidden
+                    else:
+                        try:
+                            delattr(node_class, "hidden")
+                        except AttributeError:
+                            pass
+                except AttributeError:
+                    pass
+                try:
+                    if orig_instance_hidden is not None:
+                        node_instance.hidden = orig_instance_hidden
+                    else:
+                        try:
+                            delattr(node_instance, "hidden")
+                        except AttributeError:
+                            pass
+                except AttributeError:
+                    pass
 
             # Unwrap ComfyUI latest API wrapped outputs
             if hasattr(res, "args") and isinstance(res.args, tuple):
