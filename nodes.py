@@ -476,7 +476,14 @@ class darkHUB_Subgraph:
 
             # Resolve arguments
             args = {}
-            for input_name, input_def in {**required_inputs, **optional_inputs}.items():
+            # Combine static inputs with actual slots present on the node (e.g., dynamic inputs like a, b in Math nodes)
+            all_input_names = set(required_inputs.keys()) | set(optional_inputs.keys())
+            for slot_name in slot_to_input_name.values():
+                if "." not in slot_name:
+                    all_input_names.add(slot_name)
+
+            for input_name in all_input_names:
+                input_def = required_inputs.get(input_name) or optional_inputs.get(input_name)
                 # Check if this input name is an Autogrow plural input (e.g. images, latents, masks)
                 is_autogrow = False
                 prefix_prefix = f"{input_name}."
