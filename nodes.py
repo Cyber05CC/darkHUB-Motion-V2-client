@@ -563,7 +563,8 @@ class darkHUB_Subgraph:
                                     found = True
 
                             if found:
-                                autogrow_dict[slot_name] = val
+                                key_name = slot_name[len(prefix_prefix):]
+                                autogrow_dict[key_name] = val
                     args[input_name] = autogrow_dict
                     continue
 
