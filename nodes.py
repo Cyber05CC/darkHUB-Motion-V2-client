@@ -474,18 +474,16 @@ class darkHUB_Subgraph:
             for input_name, input_def in {**required_inputs, **optional_inputs}.items():
                 # Check if this input name is an Autogrow plural input (e.g. images, latents, masks)
                 is_autogrow = False
-                prefix = ""
-                if input_name.endswith("s"):
-                    prefix = input_name[:-1]
-                    for slot_name in slot_to_input_name.values():
-                        if slot_name.startswith(prefix) and slot_name[len(prefix):].isdigit():
-                            is_autogrow = True
-                            break
+                prefix_prefix = f"{input_name}."
+                for slot_name in slot_to_input_name.values():
+                    if slot_name.startswith(prefix_prefix):
+                        is_autogrow = True
+                        break
 
                 if is_autogrow:
                     autogrow_dict = {}
                     for slot_idx, slot_name in slot_to_input_name.items():
-                        if slot_name.startswith(prefix) and slot_name[len(prefix):].isdigit():
+                        if slot_name.startswith(prefix_prefix):
                             val = None
                             found = False
 
@@ -576,13 +574,6 @@ class darkHUB_Subgraph:
                     "source_stats": args["source_stats"],
                     "target_index": target_index
                 }
-
-            if node_type == "BatchImagesNode":
-                print(f"[darkHUB DEBUG] BatchImagesNode: required={required_inputs}, optional={optional_inputs}")
-                print(f"[darkHUB DEBUG] slot_to_input_name: {slot_to_input_name}")
-                print(f"[darkHUB DEBUG] args resolved: {args}")
-                print(f"[darkHUB DEBUG] inputs_map: {inputs_map}")
-                print(f"[darkHUB DEBUG] internal_links: {internal_links}")
 
             # Run node execution
             try:
