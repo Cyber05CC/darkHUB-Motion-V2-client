@@ -577,6 +577,13 @@ class darkHUB_Subgraph:
                     "target_index": target_index
                 }
 
+            if node_type == "BatchImagesNode":
+                print(f"[darkHUB DEBUG] BatchImagesNode: required={required_inputs}, optional={optional_inputs}")
+                print(f"[darkHUB DEBUG] slot_to_input_name: {slot_to_input_name}")
+                print(f"[darkHUB DEBUG] args resolved: {args}")
+                print(f"[darkHUB DEBUG] inputs_map: {inputs_map}")
+                print(f"[darkHUB DEBUG] internal_links: {internal_links}")
+
             # Run node execution
             try:
                 import inspect
