@@ -252,7 +252,7 @@ def resolve_virtual_nodes(subgraph):
 
         # Trace and map each input slot
         for slot_idx, slot_name in slot_to_name.items():
-            source = trace_slot(node_id, slot_idx)
+            source = trace_link_to(node_id, slot_idx, None)
             if not source:
                 continue
 
