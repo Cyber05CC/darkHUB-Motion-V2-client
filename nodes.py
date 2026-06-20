@@ -562,18 +562,34 @@ class darkHUB_Subgraph:
                             args[input_name] = input_def[1]["default"]
 
             # Special handling for ColorTransfer node's DynamicCombo input "source_stats"
-            if node_type == "ColorTransfer" and "source_stats" in args and isinstance(args["source_stats"], str):
-                target_index = 0
-                serialized_widgets = node_data.get("widgets", {})
-                if "target_index" in serialized_widgets:
-                    try:
-                        target_index = int(serialized_widgets["target_index"])
-                    except Exception:
-                        pass
-                args["source_stats"] = {
-                    "source_stats": args["source_stats"],
-                    "target_index": target_index
-                }
+            if node_type == "ColorTransfer":
+                if "source_stats" not in args or args["source_stats"] is None:
+                    args["source_stats"] = {}
+                
+                if isinstance(args["source_stats"], str):
+                    val_str = args["source_stats"]
+                    args["source_stats"] = {
+                        "source_stats": val_str,
+                        "target_index": 0
+                    }
+                
+                if isinstance(args["source_stats"], dict):
+                    if "source_stats" not in args["source_stats"]:
+                        serialized_widgets = node_data.get("widgets", {})
+                        mode = serialized_widgets.get("source_stats", "per_frame")
+                        if isinstance(mode, dict):
+                            mode = mode.get("source_stats", "per_frame")
+                        args["source_stats"]["source_stats"] = mode
+                    
+                    if "target_index" not in args["source_stats"]:
+                        target_index = 0
+                        serialized_widgets = node_data.get("widgets", {})
+                        if "target_index" in serialized_widgets:
+                            try:
+                                target_index = int(serialized_widgets["target_index"])
+                            except Exception:
+                                pass
+                        args["source_stats"]["target_index"] = target_index
 
             # Run node execution
             try:
