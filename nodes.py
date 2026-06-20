@@ -458,6 +458,7 @@ class darkHUB_Subgraph:
 
         # 4. Execution Cache & UI Outputs merging
         cache = {}
+        cache_is_list = {}
         merged_ui = {}
 
         for node_id in sorted_node_ids:
@@ -485,6 +486,8 @@ class darkHUB_Subgraph:
 
             # Resolve arguments
             args = {}
+            raw_link_inputs = set()
+            mapped_list_inputs = set()
             # Combine static inputs with actual slots present on the node (e.g., dynamic inputs like a, b in Math nodes)
             all_input_names = set(required_inputs.keys()) | set(optional_inputs.keys())
             for slot_name in slot_to_input_name.values():
@@ -557,6 +560,7 @@ class darkHUB_Subgraph:
                                                     val = inputs_info[ext_input_key]
                                             if val is None:
                                                 val = kwargs.get(ext_input_key)
+                                            raw_link_inputs.add(input_name)
                                         else:
                                             val = kwargs.get(ext_input_key)
                                         found = True
@@ -576,8 +580,11 @@ class darkHUB_Subgraph:
                                         o_slot = link["origin_slot"]
                                         if is_raw_link:
                                             val = [origin_id, o_slot]
+                                            raw_link_inputs.add(input_name)
                                         else:
                                             val = cache.get((origin_id, o_slot))
+                                            if cache_is_list.get((origin_id, o_slot), False):
+                                                mapped_list_inputs.add(input_name)
                                         found = True
                                         break
 
@@ -616,6 +623,7 @@ class darkHUB_Subgraph:
                                             val = inputs_info[ext_input_key]
                                     if val is None:
                                         val = kwargs.get(ext_input_key)
+                                    raw_link_inputs.add(input_name)
                                 else:
                                     val = kwargs.get(ext_input_key)
                                 found = True
@@ -636,8 +644,11 @@ class darkHUB_Subgraph:
                                 o_slot = link["origin_slot"]
                                 if is_raw_link:
                                     val = [origin_id, o_slot]
+                                    raw_link_inputs.add(input_name)
                                 else:
                                     val = cache.get((origin_id, o_slot))
+                                    if cache_is_list.get((origin_id, o_slot), False):
+                                        mapped_list_inputs.add(input_name)
                                 found = True
                                 break
 
@@ -728,16 +739,106 @@ class darkHUB_Subgraph:
             except AttributeError:
                 pass
 
-            # Run node execution with logs suppressed to protect IP
-            import logging
-            import contextlib
-            logging.disable(logging.CRITICAL)
+            # Determine if the node accepts list inputs
+            input_is_list = getattr(node_class, "INPUT_IS_LIST", False)
+
+            # Identify list inputs that trigger mapping
+            map_len = 1
+            list_keys = []
+            for k, v in args.items():
+                if isinstance(v, list) and not input_is_list:
+                    if k not in raw_link_inputs and k in mapped_list_inputs:
+                        list_keys.append(k)
+                        if len(v) > map_len:
+                            map_len = len(v)
+
+            # Run node execution
             try:
-                with open(os.devnull, "w") as devnull:
-                    with contextlib.redirect_stdout(devnull), contextlib.redirect_stderr(devnull):
-                        res = func(**args)
+                if map_len > 1:
+                    results = []
+                    for i in range(map_len):
+                        slice_args = {}
+                        for k, v in args.items():
+                            if k in list_keys:
+                                slice_args[k] = v[min(i, len(v) - 1)]
+                            else:
+                                slice_args[k] = v
+                        
+                        import logging
+                        import contextlib
+                        logging.disable(logging.CRITICAL)
+                        try:
+                            with open(os.devnull, "w") as devnull:
+                                with contextlib.redirect_stdout(devnull), contextlib.redirect_stderr(devnull):
+                                    res = func(**slice_args)
+                        finally:
+                            logging.disable(logging.NOTSET)
+
+                        # Unwrap ComfyUI latest API wrapped outputs
+                        if hasattr(res, "args") and isinstance(res.args, tuple):
+                            res = res.args
+
+                        # Handle UI results
+                        if isinstance(res, dict) and "result" in res:
+                            if "ui" in res:
+                                for ui_key, ui_val in res["ui"].items():
+                                    if ui_key not in merged_ui:
+                                        merged_ui[ui_key] = []
+                                    if isinstance(ui_val, list):
+                                        merged_ui[ui_key].extend(ui_val)
+                                    else:
+                                        merged_ui[ui_key].append(ui_val)
+                            val = res["result"]
+                        else:
+                            val = res
+                        results.append(val)
+
+                    # Combine/stack results
+                    first_res = results[0]
+                    if isinstance(first_res, tuple):
+                        num_slots = len(first_res)
+                        stacked_outputs = []
+                        for slot_idx in range(num_slots):
+                            slot_list = []
+                            for res_val in results:
+                                if isinstance(res_val, tuple) and slot_idx < len(res_val):
+                                    slot_list.append(res_val[slot_idx])
+                                else:
+                                    slot_list.append(None)
+                            stacked_outputs.append(slot_list)
+                        node_outputs_val = tuple(stacked_outputs)
+                    else:
+                        node_outputs_val = results
+                else:
+                    # Normal single execution
+                    import logging
+                    import contextlib
+                    logging.disable(logging.CRITICAL)
+                    try:
+                        with open(os.devnull, "w") as devnull:
+                            with contextlib.redirect_stdout(devnull), contextlib.redirect_stderr(devnull):
+                                res = func(**args)
+                    finally:
+                        logging.disable(logging.NOTSET)
+
+                    # Unwrap ComfyUI latest API wrapped outputs
+                    if hasattr(res, "args") and isinstance(res.args, tuple):
+                        res = res.args
+
+                    # Handle UI results
+                    if isinstance(res, dict) and "result" in res:
+                        if "ui" in res:
+                            for ui_key, ui_val in res["ui"].items():
+                                if ui_key not in merged_ui:
+                                    merged_ui[ui_key] = []
+                                if isinstance(ui_val, list):
+                                    merged_ui[ui_key].extend(ui_val)
+                                else:
+                                    merged_ui[ui_key].append(ui_val)
+                        node_outputs_val = res["result"]
+                    else:
+                        node_outputs_val = res
             finally:
-                logging.disable(logging.NOTSET)
                 # Restore original hidden attributes
                 try:
                     if orig_class_hidden is not None:
@@ -760,30 +861,27 @@ class darkHUB_Subgraph:
                 except AttributeError:
                     pass
 
-            # Unwrap ComfyUI latest API wrapped outputs
-            if hasattr(res, "args") and isinstance(res.args, tuple):
-                res = res.args
-
-            # Handle UI results
-            if isinstance(res, dict) and "result" in res:
-                if "ui" in res:
-                    for ui_key, ui_val in res["ui"].items():
-                        if ui_key not in merged_ui:
-                            merged_ui[ui_key] = []
-                        if isinstance(ui_val, list):
-                            merged_ui[ui_key].extend(ui_val)
-                        else:
-                            merged_ui[ui_key].append(ui_val)
-                node_outputs_val = res["result"]
-            else:
-                node_outputs_val = res
-
-            # Cache the outputs
+            # Cache the outputs (and set cache_is_list metadata)
+            output_is_list = getattr(node_class, "OUTPUT_IS_LIST", None)
             if isinstance(node_outputs_val, tuple):
                 for slot_idx, val in enumerate(node_outputs_val):
                     cache[(node_id, slot_idx)] = val
+                    
+                    is_list_out = False
+                    if output_is_list and slot_idx < len(output_is_list):
+                        is_list_out = bool(output_is_list[slot_idx])
+                    if map_len > 1:
+                        is_list_out = True
+                    cache_is_list[(node_id, slot_idx)] = is_list_out
             else:
                 cache[(node_id, 0)] = node_outputs_val
+                
+                is_list_out = False
+                if output_is_list and len(output_is_list) > 0:
+                    is_list_out = bool(output_is_list[0])
+                if map_len > 1:
+                    is_list_out = True
+                cache_is_list[(node_id, 0)] = is_list_out
 
         # 5. Map final return values
         return_values = []
