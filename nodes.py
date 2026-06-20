@@ -751,10 +751,9 @@ class darkHUB_Subgraph:
             for k, v in args.items():
                 if isinstance(v, list) and not input_is_list:
                     if k not in raw_link_inputs:
-                        if k in mapped_list_inputs or k in external_inputs:
-                            list_keys.append(k)
-                            if len(v) > map_len:
-                                map_len = len(v)
+                        list_keys.append(k)
+                        if len(v) > map_len:
+                            map_len = len(v)
 
             # Run node execution
             try:
