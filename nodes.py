@@ -309,8 +309,10 @@ def resolve_virtual_nodes(subgraph):
                                 src_input_types = src_class.INPUT_TYPES()
                                 widget_names = []
                                 for group in ["required", "optional"]:
-                                    for k in src_input_types.get(group, {}).keys():
-                                        widget_names.append(k)
+                                    for k, v in src_input_types.get(group, {}).items():
+                                        t = v[0] if isinstance(v, (tuple, list)) else v
+                                        if isinstance(t, list) or (isinstance(t, str) and t.upper() in ("INT", "FLOAT", "STRING", "BOOLEAN", "BOOL", "COMBO")):
+                                            widget_names.append(k)
                                 
                                 if src_name in widget_names:
                                     w_idx = widget_names.index(src_name)
@@ -506,8 +508,10 @@ class darkHUB_Subgraph:
                     # Map names in order of INPUT_TYPES required and optional
                     widget_names = []
                     for group in ["required", "optional"]:
-                        for k in input_types.get(group, {}).keys():
-                            widget_names.append(k)
+                        for k, v in input_types.get(group, {}).items():
+                            t = v[0] if isinstance(v, (tuple, list)) else v
+                            if isinstance(t, list) or (isinstance(t, str) and t.upper() in ("INT", "FLOAT", "STRING", "BOOLEAN", "BOOL", "COMBO")):
+                                widget_names.append(k)
                     
                     for w_idx, w_name in enumerate(widget_names):
                         if w_idx < len(node_data["widgets_values"]):
