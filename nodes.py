@@ -355,7 +355,7 @@ class darkHUB_Subgraph:
     def INPUT_TYPES(s):
         inputs = {
             "required": {
-                "key": ("STRING", {"default": ""}),
+                "key": ("STRING", {"default": "", "forceInput": True}),
                 "subgraph_data": ("STRING", {"default": "", "multiline": True}),
             },
             "optional": {},
