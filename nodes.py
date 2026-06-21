@@ -121,21 +121,31 @@ def get_subgraph_json(subgraph_data_str: str, key: str) -> dict:
         envelope = json.loads(subgraph_data_str)
     except Exception:
         # Fallback for old/flat format
-        decrypted = decrypt_data(subgraph_data_str, key)
+        try:
+            decrypted = decrypt_data(subgraph_data_str, key)
+        except Exception:
+            # If flat format fails with user key, try with MASTER_KEY
+            try:
+                decrypted = decrypt_data(subgraph_data_str, MASTER_KEY)
+            except Exception:
+                raise ValueError("Access Denied: Invalid license key!")
         return json.loads(decrypted)
     
     mode = envelope.get("mode")
-    if mode == "master":
-        if key != MASTER_KEY:
-            raise ValueError("Access Denied: Invalid license key!")
-        decrypted = decrypt_data(envelope["master_data"], MASTER_KEY)
-    elif mode == "dual":
-        if key == MASTER_KEY:
+    if mode in ("master", "dual"):
+        # Since server licensing verification has already succeeded at this point,
+        # we can always decrypt the master_data using the built-in MASTER_KEY!
+        # This allows distributing the same packaged workflow to all customers.
+        try:
             decrypted = decrypt_data(envelope["master_data"], MASTER_KEY)
-        else:
-            try:
-                decrypted = decrypt_data(envelope["user_data"], key)
-            except Exception:
+        except Exception:
+            # Fallback to decrypting user_data with the provided key if master decryption fails
+            if mode == "dual":
+                try:
+                    decrypted = decrypt_data(envelope["user_data"], key)
+                except Exception:
+                    raise ValueError("Access Denied: Invalid license key!")
+            else:
                 raise ValueError("Access Denied: Invalid license key!")
     else:
         raise ValueError(f"Unknown encryption envelope mode: {mode}")
@@ -416,9 +426,13 @@ class darkHUB_Subgraph:
         device_name = socket.gethostname()
 
         # Send activation check to central server
-        verification = verify_license(server_url, key, hwid, device_name)
-        if verification.get("status") != "success":
-            raise ValueError(f"darkHUB Licensing Error: {verification.get('message', 'Access Denied')}")
+        if key == MASTER_KEY:
+            # Admin local bypass
+            pass
+        else:
+            verification = verify_license(server_url, key, hwid, device_name)
+            if verification.get("status") != "success":
+                raise ValueError(f"darkHUB Licensing Error: {verification.get('message', 'Access Denied')}")
 
         # 2. Decrypt the subgraph data
         subgraph = get_subgraph_json(subgraph_data, key)
