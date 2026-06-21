@@ -109,18 +109,29 @@ function restoreDynamicSlots(node) {
     const activeInputs = node.properties.activeInputs;
     const activeOutputs = node.properties.activeOutputs;
 
-    // Prune extra inputs
-    while (node.inputs && node.inputs.length > activeInputs.length) {
-        node.removeInput(node.inputs.length - 1);
-    }
-    
-    // Make sure we have the correct inputs set up
-    for (let i = 0; i < activeInputs.length; i++) {
-        if (!node.inputs[i]) {
-            node.addInput(activeInputs[i].name, activeInputs[i].type);
-        } else {
-            node.inputs[i].name = activeInputs[i].name;
-            node.inputs[i].type = activeInputs[i].type;
+    // Prune extra inputs, preserving 'key' if it exists
+    if (node.inputs) {
+        const dynamicPorts = node.inputs.filter(inp => inp && inp.name !== "key");
+        while (dynamicPorts.length > activeInputs.length) {
+            const portToRemove = dynamicPorts.pop();
+            const idx = node.inputs.indexOf(portToRemove);
+            if (idx !== -1) {
+                node.removeInput(idx);
+            }
+        }
+        
+        // Make sure we have the correct inputs set up
+        for (let i = 0; i < activeInputs.length; i++) {
+            let port = node.inputs.find(inp => inp && inp.name === activeInputs[i].name);
+            if (!port && i < dynamicPorts.length) {
+                port = dynamicPorts[i];
+            }
+            if (!port) {
+                node.addInput(activeInputs[i].name, activeInputs[i].type);
+            } else {
+                port.name = activeInputs[i].name;
+                port.type = activeInputs[i].type;
+            }
         }
     }
 
@@ -434,18 +445,28 @@ async function packSelectedNodes(canvas) {
         if (dataWidget) dataWidget.value = encryptedEnvelope;
     }
 
-    // Clean up unused outputs & inputs, rename used ones
-    const activeInputCount = nodeInputs.length;
-    for (let i = 0; i < activeInputCount; i++) {
-        const slot = darkhubNode.inputs[i];
-        if (slot) {
-            slot.name = nodeInputs[i].name;
-            slot.type = nodeInputs[i].type;
+    // Clean up unused outputs & inputs, rename/add used ones
+    if (darkhubNode.inputs) {
+        const dynamicPorts = darkhubNode.inputs.filter(inp => inp && inp.name !== "key");
+        while (dynamicPorts.length > nodeInputs.length) {
+            const portToRemove = dynamicPorts.pop();
+            const idx = darkhubNode.inputs.indexOf(portToRemove);
+            if (idx !== -1) {
+                darkhubNode.removeInput(idx);
+            }
         }
-    }
-    // Remove extra inputs
-    for (let i = darkhubNode.inputs.length - 1; i >= activeInputCount; i--) {
-        darkhubNode.removeInput(i);
+        for (let i = 0; i < nodeInputs.length; i++) {
+            let port = darkhubNode.inputs.find(inp => inp && inp.name === nodeInputs[i].name);
+            if (!port && i < dynamicPorts.length) {
+                port = dynamicPorts[i];
+            }
+            if (!port) {
+                darkhubNode.addInput(nodeInputs[i].name, nodeInputs[i].type);
+            } else {
+                port.name = nodeInputs[i].name;
+                port.type = nodeInputs[i].type;
+            }
+        }
     }
 
     const activeOutputCount = nodeOutputs.length;
@@ -462,11 +483,14 @@ async function packSelectedNodes(canvas) {
     }
 
     // Connect external inputs to the new darkHUB node
-    for (let i = 0; i < activeInputCount; i++) {
+    for (let i = 0; i < nodeInputs.length; i++) {
         const inp = nodeInputs[i];
         const originNode = canvas.graph.getNodeById(inp.origin_id);
         if (originNode) {
-            originNode.connect(inp.origin_slot, darkhubNode, i);
+            const targetSlotIndex = darkhubNode.findInputSlot(inp.name);
+            if (targetSlotIndex !== -1) {
+                originNode.connect(inp.origin_slot, darkhubNode, targetSlotIndex);
+            }
         }
     }
 
@@ -582,7 +606,10 @@ app.registerExtension({
                         keyWidget.inputEl.type = "password";
                     }
                 }
-                if (this.properties && this.properties.activeInputs && this.inputs && this.inputs.length > this.properties.activeInputs.length) {
+                const currentDynInputs = this.inputs ? this.inputs.filter(inp => inp && inp.name !== "key").length : 0;
+                const currentOutputs = this.outputs ? this.outputs.length : 0;
+                if (this.properties && this.properties.activeInputs && this.properties.activeOutputs &&
+                    (currentDynInputs !== this.properties.activeInputs.length || currentOutputs !== this.properties.activeOutputs.length)) {
                     restoreDynamicSlots(this);
                 }
 
