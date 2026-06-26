@@ -42,8 +42,8 @@ def get_hwid() -> str:
 
 def get_server_url() -> str:
     """Returns the obfuscated Base64 URL of the licensing server, preventing plain-text inspection."""
-    # Base64 encoded 'https://darkhub-motion-v2-server.onrender.com'
-    obfuscated_url = "aHR0cHM6Ly9kYXJraHViLW1vdGlvbi12Mi1zZXJ2ZXIub25yZW5kZXIuY29t"
+    # Base64 encoded 'https://darkhub-motion-v2-server-qbv3.onrender.com'
+    obfuscated_url = "aHR0cHM6Ly9kYXJraHViLW1vdGlvbi12Mi1zZXJ2ZXItcWJ2My5vbnJlbmRlci5jb20="
     return base64.b64decode(obfuscated_url).decode("utf-8")
 
 def _wake_server_async():
