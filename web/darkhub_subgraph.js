@@ -551,17 +551,32 @@ app.registerExtension({
 
             // Hide the subgraph_data widget DOM element and mask the key widget as password
             setTimeout(() => {
-                hideWidget(this, "subgraph_data");
-                if (this.widgets) {
-                    const keyWidget = this.widgets.find(w => w.name === "key");
-                    if (keyWidget && keyWidget.inputEl) {
-                        keyWidget.inputEl.type = "password";
-                    }
+                const w = this.widgets?.find(widget => widget.name === "subgraph_data");
+                if (w) {
+                    w.type = "hidden";
+                    w.computeSize = () => [0, -4];
+                    w.draw = () => {};
+                    if (w.inputEl) w.inputEl.style.display = "none";
+                }
+                const keyWidget = this.widgets?.find(w => w.name === "key");
+                if (keyWidget && keyWidget.inputEl) {
+                    keyWidget.inputEl.type = "password";
                 }
             }, 1);
 
             // Custom draw background to draw glowing border
             this.onDrawBackground = function(ctx, canvas) {
+                // Keep subgraph_data widget hidden and zero-sized
+                const w = this.widgets?.find(widget => widget.name === "subgraph_data");
+                if (w) {
+                    w.type = "hidden";
+                    w.computeSize = () => [0, -4];
+                    w.draw = () => {};
+                    if (w.inputEl && w.inputEl.style.display !== "none") {
+                        w.inputEl.style.display = "none";
+                    }
+                }
+
                 if (this.flags.collapsed) return;
                 
                 ctx.save();
